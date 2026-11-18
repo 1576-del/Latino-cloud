@@ -1,8 +1,5 @@
 name: Compilar extensiones
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**.md']
   workflow_dispatch:
 permissions:
   contents: write
