@@ -1,13 +1,13 @@
 name: Compilar extensiones
 on:
   push:
-    branches: [main]
+    branches: [main, experimental/peelink2-http3-aislado]
     paths-ignore: ['**.md']
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 concurrency:
-  group: cloudstream-build
+  group: cloudstream-build-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
@@ -21,27 +21,69 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          packages: 'platform-tools platforms;android-35 build-tools;34.0.0 build-tools;35.0.0'
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
       - name: Pruebas y compilación
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon testDebugUnitTest make makePluginsJson ensureJarCompatibility
-      - name: Preparar distribución
+          ./gradlew --no-daemon \
+            :Peelink2:testDebugUnitTest :Peelink2:make :Peelink2:ensureJarCompatibility \
+            :Peelink2HTTP3Experimental:testDebugUnitTest \
+            :Peelink2HTTP3Experimental:make :Peelink2HTTP3Experimental:ensureJarCompatibility \
+            makePluginsJson
+      - name: Verificar identidad separada
         run: |
-          mkdir -p dist
-          cp Peelink2/build/*.cs3 dist/
-          cp Peelink2/build/*.jar dist/
-          cp build/plugins.json repo.json dist/
-          test "$(jq length dist/plugins.json)" = 1
-          test -s dist/Peelink2.cs3
+          test "$(jq 'length' build/plugins.json)" = 2
+          test "$(jq '[.[] | select(.internalName == "Peelink2")] | length' build/plugins.json)" = 1
+          test "$(jq '[.[] | select(.internalName == "Peelink2HTTP3Experimental")] | length' build/plugins.json)" = 1
+          jq -e '.[] | select(.internalName == "Peelink2HTTP3Experimental") | ((.name == "Peelink2HTTP3Experimental") and (.description | test("Experimental")) and (.version >= 1))' build/plugins.json > /dev/null
+      - name: Preparar paquete experimental
+        run: |
+          mkdir -p dist/experimental
+          cp Peelink2HTTP3Experimental/build/Peelink2HTTP3Experimental.cs3 dist/experimental/
+          cp Peelink2HTTP3Experimental/build/Peelink2HTTP3Experimental.jar dist/experimental/
+          test -s dist/experimental/Peelink2HTTP3Experimental.cs3
+          test -s dist/experimental/Peelink2HTTP3Experimental.jar
+          (cd dist/experimental && sha256sum Peelink2HTTP3Experimental.cs3 Peelink2HTTP3Experimental.jar > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: cloudstream-latino
-          path: dist/
-      - name: Publicar rama builds
+          name: peelink2-http3-experimental
+          path: dist/experimental/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Preparar distribución original
         if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p dist/original
+          cp Peelink2/build/Peelink2.cs3 dist/original/
+          cp Peelink2/build/Peelink2.jar dist/original/
+          jq '[.[] | select(.internalName == "Peelink2")]' build/plugins.json > dist/original/plugins.json
+          cp repo.json dist/original/
+          test "$(jq length dist/original/plugins.json)" = 1
+          test -s dist/original/Peelink2.cs3
+          test -s dist/original/Peelink2.jar
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: cloudstream-latino-original
+          path: dist/original/
+          if-no-files-found: error
+          retention-days: 30
+  publish:
+    name: Publicar distribución original
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cloudstream-latino-original
+          path: dist
+      - name: Publicar rama builds
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

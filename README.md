@@ -14,6 +14,12 @@ Después instala o actualiza **Peelink2**. La versión 4 corrige la búsqueda, e
 
 La extensión está marcada como beta. Usa una versión de Cloudstream compatible con extensiones beta si tu versión estable no la muestra o no permite instalarla.
 
+## Variante experimental HTTP3
+
+La rama `experimental/peelink2-http3-aislado` compila una extensión independiente llamada **Peelink2 HTTP3 Experimental** (`Peelink2HTTP3Experimental`). Tiene su propio identificador interno, versión independiente y paquete Android, por lo que no sustituye ni actualiza **Peelink2**.
+
+El workflow de esa rama solo conserva su `.cs3`, su `.jar` y un archivo `SHA256SUMS` como artefactos de GitHub Actions. No publica en la rama `builds`, no modifica `repo.json` y no reemplaza la distribución original. Para probarla, descarga el artefacto `peelink2-http3-experimental` de la ejecución correspondiente e instala el `.cs3` manualmente. Requiere el mismo proxy local en `127.0.0.1:8768` que la variante original.
+
 ## Catálogo y búsqueda
 
 - **Todo el catálogo:** navega por [las páginas del sitio](https://www.peelink2.com/inicio), incluidas las siguientes páginas; no se descarga todo de una vez en el teléfono.
