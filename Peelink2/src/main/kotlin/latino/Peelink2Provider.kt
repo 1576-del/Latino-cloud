@@ -3,8 +3,21 @@ package latino
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import java.net.URLEncoder
-import java.util.concurrent.ConcurrentHashMap
+import java.net.URI
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+
+internal fun peelinkProxyUrl(url: String): String? = runCatching {
+    val uri = URI(url)
+    require(uri.scheme.equals("https", true) && uri.host?.lowercase() in setOf("peelink2.com", "www.peelink2.com"))
+    require(uri.userInfo == null && (uri.port == -1 || uri.port == 443))
+    val path = uri.rawPath.orEmpty().ifEmpty { "/" }
+    val decodedPath = uri.path.orEmpty().ifEmpty { "/" }
+    require(path.startsWith("/") && !path.startsWith("//") && !decodedPath.startsWith("//"))
+    require(!decodedPath.any { it == '\\' || it.code < 32 || it.code == 127 })
+    require(!uri.query.orEmpty().any { it == '\\' || it.code < 32 || it.code == 127 })
+    "http://127.0.0.1:8768$path" + (uri.rawQuery?.let { "?$it" } ?: "")
+}.getOrNull()
 
 class Peelink2Provider : LatinoProvider() {
     override var mainUrl = "https://www.peelink2.com"
@@ -20,7 +33,15 @@ class Peelink2Provider : LatinoProvider() {
         "$mainUrl/2012/12/pagina-infantil.html" to "Infantil",
         "$mainUrl/2012/12/pagina-terror.html" to "Terror"
     )
-    private val genrePages = ConcurrentHashMap<String, PeelinkCatalog.GenrePage>()
+    private suspend fun peelinkDocument(url: String): Document {
+        val target = peelinkProxyUrl(url) ?: throw ErrorLoadingException("URL de Peelink2 no autorizada.")
+        val response = app.get(target)
+        if (response.code !in 200..299) throw ErrorLoadingException("Peelink2 respondió HTTP ${response.code}.")
+        if (response.text.contains("<title>Just a moment", ignoreCase = true)) {
+            throw ErrorLoadingException("Peelink2 bloquea el acceso con Cloudflare.")
+        }
+        return Jsoup.parse(response.text, url)
+    }
 
     private fun cards(
         doc: Document, featured: Boolean = false, fragment: Boolean = false, search: Boolean = false
@@ -37,30 +58,20 @@ class Peelink2Provider : LatinoProvider() {
         val genre = request.data.contains("/pagina-")
         val doc: Document
         if (genre && page > 1) {
-            val config = genrePages[request.data] ?: PeelinkCatalog.genrePage(
-                document(request.data), mainUrl
-            )?.also { genrePages[request.data] = it }
-            if (config == null) return newHomePageResponse(HomePageList(request.name, emptyList()), false)
-            val response = app.post(config.endpoint, data = mapOf(
-                "paginador_page" to page.toString(), "cat_id" to config.category,
-                "cat_name" to config.categoryName, "post_id" to config.post
-            ))
-            if (response.code !in 200..299) throw ErrorLoadingException("Peelink2 respondió HTTP ${response.code}.")
-            doc = response.document
+            return newHomePageResponse(HomePageList(request.name, emptyList()), false)
         } else {
-            doc = document(PeelinkCatalog.pageUrl(request.data, page))
-            if (genre) PeelinkCatalog.genrePage(doc, mainUrl)?.let { genrePages[request.data] = it }
+            doc = peelinkDocument(PeelinkCatalog.pageUrl(request.data, page))
         }
         return newHomePageResponse(
             HomePageList(request.name, cards(doc, featured, genre && page > 1)),
-            if (genre) doc.selectFirst("#paginador") != null
+            if (genre) false
             else !featured && PeelinkCatalog.hasNext(doc, page)
         )
     }
 
     private suspend fun searchPage(query: String, page: Int): Pair<List<SearchResponse>, Boolean> {
         for (term in PeelinkCatalog.searchTerms(query)) {
-            val doc = document("$mainUrl/?s=${URLEncoder.encode(term, "UTF-8")}&paged=$page")
+            val doc = peelinkDocument("$mainUrl/?s=${URLEncoder.encode(term, "UTF-8")}&paged=$page")
             val results = cards(doc, search = true)
             if (results.isNotEmpty()) return results to PeelinkCatalog.hasNext(doc, page)
         }
@@ -74,14 +85,14 @@ class Peelink2Provider : LatinoProvider() {
         return newSearchResponseList(results, hasNext)
     }
 
-    override suspend fun load(url: String): LoadResponse = movie(url, document(url))
+    override suspend fun load(url: String): LoadResponse = movie(url, peelinkDocument(url))
 
     override suspend fun loadLinks(
         data: String, isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = document(data)
+        val doc = peelinkDocument(data)
         return resolvePlayers(
             HtmlTools.latinoPlayers(doc.html(), data), data, subtitleCallback, callback
         )
